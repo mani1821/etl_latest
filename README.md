@@ -180,3 +180,11 @@ Instead of a `tables:` list, the YAML holds one query (see `configs/icd_dpi.yaml
     delta = run_parity(YAML, env="databricks", load_type="incremental", table_list=tables_df, send_email=False)
     send_report([full, delta], config=YAML)
     # or later: send_report(latest=[f"{YAML}#full", f"{YAML}#incremental"], config=YAML)
+
+## 3.14.0: stored source counts, CHAR vs VARCHAR
+
+* `settings.row_count_source: counts` + `run_parity(..., counts=counts_df)` (DataFrame with `table_name, row_count`,
+  or `settings.counts_query`): `row_count` (FULL) and `delta_row_count` (DELTA) compare the stored source count with
+  the live target count, with the usual tolerances. Tables not in the counts: live source count. `live` = as before.
+* `settings.schema_type_warn` (default `[[char, varchar], [char, varchar2], [char, string], [nchar, nvarchar2]]`):
+  type differences in these pairs make `types` WARN instead of FAIL (any length, either direction).

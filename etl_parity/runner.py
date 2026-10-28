@@ -55,8 +55,23 @@ def _diff_cols(per_column: dict, limit: int = 6) -> str:
 
 
 class TableValidator:
-    def __init__(self, src, tgt, settings: Settings, rec: Recorder):
+    def __init__(self, src, tgt, settings: Settings, rec: Recorder, counts: Optional[dict] = None):
         self.src, self.tgt, self.s, self.rec = src, tgt, settings, rec
+        self.counts = counts                     # {TABLE: stored source count} when row_count_source = counts
+
+    def stored_count(self, spec: TableSpec):
+        """Stored source count of this table (row_count_source = counts), else None = compare live counts."""
+        if self.counts is None:
+            return None
+        return self.counts.get(spec.name)
+
+    @staticmethod
+    def _base_type(t: str) -> str:
+        return str(t).lower().split("(")[0].strip()
+
+    def _type_warn(self, src_type: str, tgt_type: str) -> bool:
+        a, b = self._base_type(src_type), self._base_type(tgt_type)
+        return any({a, b} == {str(x).lower(), str(y).lower()} for x, y in (self.s.schema_type_warn or []))
 
     def row_tolerance(self, spec: TableSpec) -> float:
         return spec.row_mismatch_tolerance_pct if spec.row_mismatch_tolerance_pct is not None \
@@ -90,8 +105,13 @@ class TableValidator:
         self.rec.rec(t, V, "columns", "PASS" if ok_cols else "FAIL", r.n_src, r.n_tgt,
                      f"only_in_src={r.only_src} only_in_tgt={r.only_tgt}")
         nullable = f"; nullable differs (info): {r.nullable_diffs}" if r.nullable_diffs else ""
-        self.rec.rec(t, V, "types", "PASS" if not r.type_diffs else "FAIL",
-                     detail="; ".join(r.type_diffs) + nullable)
+        st, gt = {c.name: c.type for c in sc}, {c.name: c.type for c in tc}
+        hard = [d for d in r.type_diffs if not self._type_warn(st[d.split(" ", 1)[0]], gt[d.split(" ", 1)[0]])]
+        soft = [d for d in r.type_diffs if d not in hard]
+        detail = "; ".join(hard)
+        if soft:
+            detail += ("; " if hard else "") + "allowed (schema_type_warn, WARN): " + "; ".join(soft)
+        self.rec.rec(t, V, "types", "FAIL" if hard else "WARN" if soft else "PASS", detail=detail + nullable)
         parts = []
         if not ok_cols:
             parts.append(f"only_in_src={r.only_src} only_in_tgt={r.only_tgt}")
@@ -110,13 +130,19 @@ class TableValidator:
     def check_row_count(self, spec: TableSpec):
         t = spec.name
         n_src, n_tgt = self.src.count(spec.name, spec.filter), self.tgt.count(spec.target_name, spec.filter)
-        diff_pct = abs(n_src - n_tgt) / max(n_src, 1) * 100
+        stored = self.stored_count(spec)
+        base = n_src if stored is None else stored  # counts mode: stored source count vs live target count
+        diff_pct = abs(base - n_tgt) / max(base, 1) * 100
         tol = self.s.count_tolerance_pct
-        self.rec.rec(t, "row_count", "row_count", self._within(abs(n_src - n_tgt), diff_pct, tol), n_src, n_tgt,
-                     f"diff_pct={diff_pct:.4f}, count tolerance {tol}%")
-        d = n_tgt - n_src
-        self.rec.note(t, "row_count", f"{n_src:,} vs {n_tgt:,}" + (f" ({d:+,})" if d else ""))
-        return n_src, n_tgt
+        how = "" if self.counts is None else (
+            f"; source count from the counts table (live source count {n_src:,})" if stored is not None
+            else "; not in the counts table: live source count used")
+        self.rec.rec(t, "row_count", "row_count", self._within(abs(base - n_tgt), diff_pct, tol), base, n_tgt,
+                     f"diff_pct={diff_pct:.4f}, count tolerance {tol}%{how}")
+        d = n_tgt - base
+        self.rec.note(t, "row_count", f"{base:,} vs {n_tgt:,}" + (f" ({d:+,})" if d else "")
+                      + (" (source: counts table)" if stored is not None else ""))
+        return n_src, n_tgt                      # live counts: sampling / rows compared
 
     # ------------------------------------------------------------------ 3 + 4. rows and profiles
     def check_rows(self, spec: TableSpec, cols, non_keys, n_src: int, n_tgt: int):
@@ -305,14 +331,24 @@ class TableValidator:
 
     def _delta_count(self, t, V, spec, n_s, n_t, sw, tw):
         tol = self._delta_tol(spec, "count_tolerance_pct")
+        stored = self.stored_count(spec)
+        how = "" if self.counts is None else (
+            f" | source count from the counts table (live source delta {n_s:,})" if stored is not None
+            else " | not in the counts table: live source delta count used")
+        n_s = n_s if stored is None else stored
         pct = abs(n_s - n_t) / max(n_s, 1) * 100
         self.rec.rec(t, V, "delta_row_count", self._within(abs(n_s - n_t), pct, tol), n_s, n_t,
-                     f"rows written by this run, diff {pct:.4f}% (tolerance {tol}%) | source: {sw} | target: {tw}")
+                     f"rows written by this run, diff {pct:.4f}% (tolerance {tol}%) | source: {sw} | target: {tw}"
+                     + how)
 
     def check_incremental(self, spec: TableSpec, cols, non_keys):
         t, V, inc, keys = spec.name, "incremental", spec.incremental, spec.keys
         sw, tw = inc.source_delta, inc.target_delta
         n_s, n_t = self.src.count(spec.name, sw), self.tgt.count(spec.target_name, tw)
+        if n_s == 0 and n_t == 0 and self.stored_count(spec):
+            self._delta_count(t, V, spec, n_s, n_t, sw, tw)
+            self.rec.note(t, V, "both live deltas empty; stored source count is not")
+            return
         if n_s == 0 and n_t == 0:
             self.rec.rec(t, V, "delta_row_count", "WARN", 0, 0, "both deltas are empty: check the delta conditions")
             self.rec.note(t, V, "both deltas empty: check the delta conditions / run window")
@@ -464,6 +500,10 @@ class TableValidator:
         t, V, inc = spec.name, "incremental", spec.incremental
         sw, tw = inc.source_delta, inc.target_delta
         n_s, n_t = self.src.count(spec.name, sw), self.tgt.count(spec.target_name, tw)
+        if n_s == 0 and n_t == 0 and self.stored_count(spec):
+            self._delta_count(t, V, spec, n_s, n_t, sw, tw)
+            self.rec.note(t, V, "both live deltas empty; stored source count is not")
+            return
         if n_s == 0 and n_t == 0:
             self.rec.rec(t, V, "delta_row_count", "WARN", 0, 0, "both deltas are empty: check the delta conditions")
             self.rec.note(t, V, "both deltas empty: check the delta conditions / run window")
@@ -498,7 +538,7 @@ def run_parity(config: str, env: Optional[str] = None, tables: Optional[list] = 
                spark: Optional[SparkSession] = None, summary_style: str = "tree",
                parallel_tables: Optional[int] = None, email_to: Optional[str] = None,
                report_path: Optional[str] = None, send_email: bool = True, label: Optional[str] = None,
-               load_type: Optional[str] = None, table_list=None) -> ParityRun:
+               load_type: Optional[str] = None, table_list=None, counts=None) -> ParityRun:
     """
     Validate the tables in `config` for environment `env`.
 
@@ -520,6 +560,9 @@ def run_parity(config: str, env: Optional[str] = None, tables: Optional[list] = 
     table_list: the tables to validate as a Spark DataFrame built in the notebook (columns table_name,
                 watermark_from, water_mark_to, load_type, incremental_column, key_list); the YAML then gives only
                 settings, table_source options (column names, exclude_cols, ...) and overrides.
+    counts: stored source row counts (DataFrame or SQL: table_name, row_count), used when
+            settings.row_count_source = counts (default: settings.counts_query); FULL tables compare it with the
+            target's COUNT(*), DELTA tables with the target's delta window count.
     """
     started = time.time()
     spark = spark or SparkSession.getActiveSession() or SparkSession.builder.appName("etl_parity").getOrCreate()
@@ -530,7 +573,7 @@ def run_parity(config: str, env: Optional[str] = None, tables: Optional[list] = 
     tgt = make_reader(spark, cfg.target, s.read_partitions)
     rec = Recorder(spark, s.results_table, s.mismatch_table, cfg.env, s.mismatch_sample_limit)
     only = {x.upper() for x in tables} if tables else None
-    validator = TableValidator(src, tgt, s, rec)
+    validator = TableValidator(src, tgt, s, rec, _load_counts(spark, s, counts))
     if table_list is not None or cfg.table_source:   # tables, load types, watermarks and keys from a query / DataFrame
         from .table_source import build_tables, describe
         if table_list is not None and cfg.tables:
@@ -585,6 +628,31 @@ def run_parity(config: str, env: Optional[str] = None, tables: Optional[list] = 
     if raise_on_fail and failed:
         raise RuntimeError(f"ETL parity run {rec.run_id} has failures; see {s.results_table}")
     return run
+
+
+def _load_counts(spark, s, counts) -> Optional[dict]:
+    """{TABLE: count} from the counts DataFrame / query when row_count_source = counts, else None."""
+    if s.row_count_source != "counts":
+        if counts is not None:
+            print("counts= given but settings.row_count_source is 'live': live counts compared")
+        return None
+    src = counts if counts is not None else s.counts_query
+    if src is None:
+        raise ValueError("row_count_source = counts needs run_parity(..., counts=<DataFrame>) or settings.counts_query")
+    df = src if hasattr(src, "collect") else spark.sql(src)
+    names = {"table_name": "table_name", "row_count": "row_count", **(s.counts_columns or {})}
+    lower = {c.lower(): c for c in df.columns}
+    miss = [names[k] for k in ("table_name", "row_count") if str(names[k]).lower() not in lower]
+    if miss:
+        raise ValueError(f"counts has no column(s) {miss}; it returns {df.columns} (set settings.counts_columns)")
+    tcol, ccol = lower[str(names["table_name"]).lower()], lower[str(names["row_count"]).lower()]
+    out = {}
+    for r in df.select(tcol, ccol).collect():
+        name = str(r[0] or "").strip().split(".")[-1].upper()
+        if name and r[1] is not None:
+            out[name] = int(r[1])
+    print(f"row counts: stored source counts for {len(out)} table(s) (others: live count)")
+    return out
 
 
 def _report(run: ParityRun, rec, s, email_to: Optional[str], report_path: Optional[str], send: bool = True):

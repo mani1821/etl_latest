@@ -22,11 +22,20 @@ display(tables_df)
 
 # COMMAND ----------
 
-# 3. all tables (FULL and DELTA), one run id
-run = run_parity(YAML, env="databricks", table_list=tables_df, send_email=False)
+# 3. stored source counts (settings.row_count_source: counts): table_name, row_count
+#    FULL tables: count of the whole table; DELTA tables: count of the delta window
+counts_df = spark.sql("""
+    <your counts query>
+""")
+display(counts_df)
 
 # COMMAND ----------
 
-# 4. e-mail + full report
+# 4. all tables (FULL and DELTA), one run id
+run = run_parity(YAML, env="databricks", table_list=tables_df, counts=counts_df, send_email=False)
+
+# COMMAND ----------
+
+# 5. e-mail + full report
 report = send_report([run], config=YAML)
 displayHTML(report.report_html)

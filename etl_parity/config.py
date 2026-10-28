@@ -92,6 +92,15 @@ class Settings:
                                               #   between 1,000 and 100,000 buckets)
     max_detail_rows: int = 1_000_000          # rows (per side) of differing buckets compared row by row; beyond that the
                                               #   remaining differing buckets are only counted
+    # row counts: live = COUNT(*) on source and target; counts = the stored source count (counts= DataFrame / counts_query)
+    #   against the live target count (FULL tables: whole table; DELTA tables: the delta window); a table without a
+    #   stored count falls back to live
+    row_count_source: str = "live"
+    counts_query: Optional[str] = None        # SQL giving table_name, row_count (used when no counts= DataFrame is passed)
+    counts_columns: Optional[dict] = None     # column names in it, default {table_name: table_name, row_count: row_count}
+    # schema: type differences in these pairs are WARN, not FAIL (base type names, any length, either direction)
+    schema_type_warn: list = field(default_factory=lambda: [["char", "varchar"], ["char", "varchar2"],
+                                                            ["char", "string"], ["nchar", "nvarchar2"]])
     results_table: Optional[str] = None       # e.g. it_bronze_dev.test_only.parity_results
     mismatch_table: Optional[str] = None      # e.g. it_bronze_dev.test_only.parity_mismatches
 
@@ -99,6 +108,11 @@ class Settings:
         if not self.results_table or not self.mismatch_table:
             raise ValueError("settings need results_table and mismatch_table "
                              "(e.g. it_bronze_dev.test_only.parity_results / parity_mismatches)")
+        if str(self.row_count_source).lower() not in ("live", "counts"):
+            raise ValueError("row_count_source must be 'live' or 'counts'")
+        self.row_count_source = str(self.row_count_source).lower()
+        if not all(isinstance(p, (list, tuple)) and len(p) == 2 for p in (self.schema_type_warn or [])):
+            raise ValueError("schema_type_warn must be a list of type pairs, e.g. [[char, varchar]]")
         if self.keyless_method not in ("fingerprint", "sample"):
             raise ValueError("keyless_method must be 'fingerprint' or 'sample'")
         if self.ts_truncate is not None and str(self.ts_truncate).lower() not in TS_UNITS:

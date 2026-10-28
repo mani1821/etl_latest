@@ -24,6 +24,12 @@ settings:
   delta_count_tolerance_pct: 0.0
   delta_key_tolerance_pct: 0.0
   parallel_tables: 4
+  # row counts: live = COUNT(*) on source and target | counts = stored source counts (run_parity(..., counts=df))
+  #   vs the live target count (FULL: whole table, DELTA: the delta window); tables not in counts: live
+  row_count_source: counts
+  # counts_columns: {table_name: table_name, row_count: row_count}   # column names in the counts DataFrame
+  # schema: these type pairs are WARN, not FAIL (any length, either direction)
+  schema_type_warn: [[char, varchar], [char, varchar2], [char, string], [nchar, nvarchar2]]
   results_table: it_bronze_dev.test_only.parity_results
   mismatch_table: it_bronze_dev.test_only.parity_mismatches
   # email: {...}                      # same block as before
