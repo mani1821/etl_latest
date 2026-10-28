@@ -1,0 +1,59 @@
+# =====================================================================================
+# ICD / DPI parity validation: the tables come from a DataFrame (table_list=), NOT from a tables: list.
+#
+#   tables_df = spark.sql("""<your table-list query>""")
+#   full  = run_parity(YAML, env="databricks", load_type="full",        table_list=tables_df, send_email=False)
+#   delta = run_parity(YAML, env="databricks", load_type="incremental", table_list=tables_df, send_email=False)
+#   send_report([full, delta], config=YAML)
+# =====================================================================================
+
+default_env: databricks
+
+environments:
+  databricks:                         # {table} = table name from the queries, lower case
+    source: {type: table, name: "<catalog>.<legacy_schema>.{table}"}
+    target: {type: table, name: "<catalog>.<new_schema>.{table}"}
+
+settings:
+  ts_truncate: second                 # ignore millisecond / microsecond format differences
+  sample_threshold_rows: 500000
+  sample_pct: 10
+  max_sample_rows: 100000
+  count_tolerance_pct: 0.0
+  row_mismatch_tolerance_pct: 0.0
+  delta_count_tolerance_pct: 0.0
+  delta_key_tolerance_pct: 0.0
+  parallel_tables: 4
+  results_table: it_bronze_dev.test_only.parity_results
+  mismatch_table: it_bronze_dev.test_only.parity_mismatches
+  # email: {...}                      # same block as before
+
+# ---- which tables, how they load, their keys: the table list is a DataFrame built in the notebook,
+#      run_parity(YAML, ..., table_list=df), one row per table (the number of rows may change).
+#      The options below say how to read it. (Without table_list=, a query here is used: query: | SELECT ...)
+table_source:
+  columns:                            # column names in the query (these are the defaults; change only if different)
+    table_name: table_name
+    load_type: load_type
+    incr_column: incremental_column
+    watermark_from: watermark_from
+    watermark_to: water_mark_to
+    key_list: key_list                # 'COL1, COL2' = keys; empty / NULL = no keys (whole-row comparison)
+    # key_status: key_status          # if the query returns it: keys only when key_status = pk_value
+  full_values: [FULL]                 # load_type values (case does not matter)
+  incremental_values: [DELTA, INCREMENTAL, INCR]
+  window: exclusive_start             # incremental_column > watermark_from AND <= water_mark_to (between = both included)
+  pk_value: PRIMARY KEY
+  key_separator: ","
+  delta_only: true                    # DELTA tables: only the delta checks
+  exclude_cols: [DW_LOAD_DTTM, DLK_CREATED_BY, DLK_CREATED_TIME, DLK_UPDATED_BY, DLK_UPDATED_TIME]
+  # Not validated, reported as ERROR (check table_source): unknown load_type; DELTA row without
+  # incremental_column / watermark_from / water_mark_to; watermark_from not before water_mark_to.
+
+# ---- exceptions per table (optional); '*' = every table
+# keys replace the queried keys, exclude_cols are added to the list above,
+# incremental: {delta_only: false} = also a full comparison of the whole table
+overrides:
+  BLSBSH: {exclude_cols: [CHANGE_TIMESTAMP]}
+  # SVFTR:  {incremental: {delta_only: false, key_tolerance_pct: 1.0}}
+  # CANHD:  {num_tolerance: 0.01, row_mismatch_tolerance_pct: 0.5}
