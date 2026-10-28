@@ -234,7 +234,9 @@ def compare_profiles(src: DataFrame, tgt: DataFrame, cols: list[str], num_tolera
         if isinstance(dtype, T.StringType):
             e += [F.min(F.length(col)).alias(f"{c}|min_len"), F.max(F.length(col)).alias(f"{c}|max_len")]
         elif isinstance(dtype, (T.TimestampType, T.DateType)):
-            e += [F.min(col).alias(f"{c}|min"), F.max(col).alias(f"{c}|max")]
+            # as text inside Spark: dates outside Python's range (year 0, > 9999, DB2 defaults) would raise
+            # OverflowError when collected as Python dates
+            e += [F.min(col).cast("string").alias(f"{c}|min"), F.max(col).cast("string").alias(f"{c}|max")]
         return e
 
     all_exprs = [e for c in cols for e in exprs(c)] + [F.count(F.lit(1)).alias("_rows")]
