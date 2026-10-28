@@ -73,6 +73,11 @@ class TableValidator:
         a, b = self._base_type(src_type), self._base_type(tgt_type)
         return any({a, b} == {str(x).lower(), str(y).lower()} for x, y in (self.s.schema_type_warn or []))
 
+    def tol(self, spec: TableSpec, name: str):
+        """A tolerance: the table's own value if set, else the global setting of the same name."""
+        v = getattr(spec, name, None)
+        return v if v is not None else getattr(self.s, name)
+
     def row_tolerance(self, spec: TableSpec) -> float:
         return spec.row_mismatch_tolerance_pct if spec.row_mismatch_tolerance_pct is not None \
             else self.s.row_mismatch_tolerance_pct
@@ -133,7 +138,7 @@ class TableValidator:
         stored = self.stored_count(spec)
         base = n_src if stored is None else stored  # counts mode: stored source count vs live target count
         diff_pct = abs(base - n_tgt) / max(base, 1) * 100
-        tol = self.s.count_tolerance_pct
+        tol = self.tol(spec, "count_tolerance_pct")
         how = "" if self.counts is None else (
             f"; source count from the counts table (live source count {n_src:,})" if stored is not None
             else "; not in the counts table: live source count used")
@@ -165,7 +170,7 @@ class TableValidator:
             rec("tgt_duplicate_keys", r.tgt_dup_keys == 0, tgt=r.tgt_dup_keys, detail=f"{r.tgt_dup_keys} keys with more than one row{dup_note}")
             self._dup_mismatches(t, V, spec.keys, r)
             # missing / extra keys: same tolerance as the row count (count_tolerance_pct), within = WARN
-            ctol, est = self.s.count_tolerance_pct, ", estimated from the sample" if scope == "sample" else ""
+            ctol, est = self.tol(spec, "count_tolerance_pct"), ", estimated from the sample" if scope == "sample" else ""
             mpct, xpct = r.missing / max(r.src_keys, 1) * 100, r.extra / max(r.tgt_keys, 1) * 100
             rec("missing_keys", None, r.missing, status=self._within(r.missing, mpct, ctol),
                 detail=f"{r.missing:,} of {r.src_keys:,} source keys not in target ({mpct:.4f}%{est}), "
@@ -319,11 +324,11 @@ class TableValidator:
         if v is not None:
             return v
         if name == "count_tolerance_pct":
-            return self.s.delta_count_tolerance_pct
+            return self.tol(spec, "delta_count_tolerance_pct")
         if name == "key_tolerance_pct":
-            return self.s.delta_key_tolerance_pct
-        return self.s.delta_value_tolerance_pct if self.s.delta_value_tolerance_pct is not None \
-            else self.row_tolerance(spec)
+            return self.tol(spec, "delta_key_tolerance_pct")
+        v = self.tol(spec, "delta_value_tolerance_pct")     # table, else setting, else the row tolerance
+        return v if v is not None else self.row_tolerance(spec)
 
     @staticmethod
     def _within(diff: int, pct: float, tol: float) -> str:

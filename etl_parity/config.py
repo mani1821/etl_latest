@@ -150,6 +150,11 @@ class TableSpec:
     incremental: Optional[Incremental] = None
     distribution_tolerance_pct: Optional[float] = None   # overrides the setting for this table
     distribution_tolerance_rows: Optional[int] = None    # overrides the setting for this table
+    # every global tolerance can be set per table under the same name (None = the setting)
+    count_tolerance_pct: Optional[float] = None          # row_count, missing_keys / extra_keys
+    delta_count_tolerance_pct: Optional[float] = None    # delta_row_count (incremental.count_tolerance_pct wins)
+    delta_key_tolerance_pct: Optional[float] = None      # delta_keys (incremental.key_tolerance_pct wins)
+    delta_value_tolerance_pct: Optional[float] = None    # delta_values (incremental.value_tolerance_pct wins)
 
     def __post_init__(self):
         self.name = self.name.upper()

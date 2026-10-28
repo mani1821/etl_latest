@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "etl-parity"
-version = "3.14.0"
+version = "3.14.1"
 description = "Validate that a migrated ETL produces the same tables as the existing one (Spark / Databricks)"
 requires-python = ">=3.9"
 dependencies = ["pyyaml"]            # pyspark is provided by Databricks

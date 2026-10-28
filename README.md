@@ -188,3 +188,10 @@ Instead of a `tables:` list, the YAML holds one query (see `configs/icd_dpi.yaml
   the live target count, with the usual tolerances. Tables not in the counts: live source count. `live` = as before.
 * `settings.schema_type_warn` (default `[[char, varchar], [char, varchar2], [char, string], [nchar, nvarchar2]]`):
   type differences in these pairs make `types` WARN instead of FAIL (any length, either direction).
+
+## 3.14.1: every tolerance per table
+
+`count_tolerance_pct`, `row_mismatch_tolerance_pct`, `delta_count_tolerance_pct`, `delta_key_tolerance_pct`,
+`delta_value_tolerance_pct`, `distribution_tolerance_pct`, `distribution_tolerance_rows` can be set per table (in
+`overrides:` or a `tables:` entry) under the same name; the table's value wins over `settings`. For DELTA tables the
+table's `incremental:` block (`count_tolerance_pct`, `key_tolerance_pct`, `value_tolerance_pct`) wins over both.
