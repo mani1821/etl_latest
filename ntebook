@@ -1,0 +1,26 @@
+# 1. setup
+import sys
+ROOT = "/Workspace/Users/skk983@ftr.com/parity_framework_v3"
+sys.path.insert(0, ROOT)
+from etl_parity import run_parity, send_report
+YAML = f"{ROOT}/configs/icd_dpi.yaml"
+
+
+# 2. the table list
+tables_df = spark.sql("""
+    <your query: table_name, watermark_from, water_mark_to, load_type, incremental_column, key_list>
+""")
+display(tables_df)
+
+# 3. all tables, one run id
+run = run_parity(YAML, env="databricks", table_list=tables_df, send_email=False)
+
+
+# 4. email
+report = send_report([run], config=YAML)
+displayHTML(report.report_html)
+
+
+# 5. one email for both runs
+report = send_report([full, delta], config=YAML)
+displayHTML(report.report_html)
