@@ -4,6 +4,8 @@ recording and writing them is done by the runner.
 """
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass, field
 from functools import reduce
 from typing import Optional
@@ -104,6 +106,13 @@ class SchemaResult:
     n_tgt: int
 
 
+def _type_text(t: str) -> str:
+    """Type as compared: lower case; 'collate utf8_binary' (Databricks' default collation, same as no collation)
+    removed, so 'varchar(9)' = 'varchar(9) collate utf8_binary'. Any other collation (e.g. utf8_lcase) stays a
+    difference: it changes how values compare."""
+    return re.sub(r"\s+collate\s+utf8_binary\b", "", str(t).lower()).strip()
+
+
 def compare_schema(src_cols, tgt_cols, exclude: set) -> SchemaResult:
     s = {c.name: c for c in src_cols}
     g = {c.name: c for c in tgt_cols}
@@ -111,7 +120,7 @@ def compare_schema(src_cols, tgt_cols, exclude: set) -> SchemaResult:
     return SchemaResult(
         only_src=sorted(set(s) - set(g) - exclude),
         only_tgt=sorted(set(g) - set(s) - exclude),
-        type_diffs=[f"{n} {s[n].type} vs {g[n].type}" for n in both if s[n].type.lower() != g[n].type.lower()],
+        type_diffs=[f"{n} {s[n].type} vs {g[n].type}" for n in both if _type_text(s[n].type) != _type_text(g[n].type)],
         nullable_diffs=[n for n in both if s[n].nullable != g[n].nullable],
         n_src=len([n for n in s if n not in exclude]), n_tgt=len([n for n in g if n not in exclude]))
 
