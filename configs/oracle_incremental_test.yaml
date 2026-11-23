@@ -1,0 +1,66 @@
+# =====================================================================================
+# Oracle-to-Oracle parity test: one incremental table, two databases with different
+# host / service / user / password / schema.
+#
+#   run = run_parity(YAML, env="oracle", send_email=False,
+#                    params={"WM_FROM": "2026-11-22 00:00:00", "WM_TO": "2026-11-23 00:00:00"})
+#   displayHTML(run.report_html)
+#
+# Fill every <...> placeholder. Conditions (delta / filter) run in Oracle: write them in Oracle SQL.
+# ${WM_FROM} / ${WM_TO} are filled from params= at run time, so the YAML does not change per run.
+# =====================================================================================
+
+default_env: oracle
+
+environments:
+  oracle:
+    source:                                        # existing ETL's output (e.g. Informatica)
+      type: oracle
+      url: "jdbc:oracle:thin:@//<SOURCE_HOST>:<SOURCE_PORT>/<SOURCE_SERVICE_NAME>"
+      user: <SOURCE_USER>
+      schema: <SOURCE_SCHEMA>
+      password_secret: {scope: <SOURCE_SECRET_SCOPE>, key: <SOURCE_SECRET_KEY>}
+    target:                                        # new ETL's output (e.g. Talend)
+      type: oracle
+      url: "jdbc:oracle:thin:@//<TARGET_HOST>:<TARGET_PORT>/<TARGET_SERVICE_NAME>"
+      user: <TARGET_USER>
+      schema: <TARGET_SCHEMA>
+      password_secret: {scope: <TARGET_SECRET_SCOPE>, key: <TARGET_SECRET_KEY>}
+
+settings:
+  ts_truncate: second                # ignore millisecond / microsecond differences
+  row_count_source: live             # source vs target COUNT(*) (no counts table for Oracle)
+  sample_threshold_rows: 500000      # bigger tables / deltas are sampled ...
+  sample_pct: 10                     # ... 10% of the keys ...
+  max_sample_rows: 100000            # ... at most 100,000 rows per side
+  read_partitions: 16                # parallel slices for full reads from Oracle
+  parallel_tables: 1
+
+  # tolerances (within = WARN, beyond = FAIL); a table can override any of them
+  count_tolerance_pct: 0.0           # row_count, missing_keys / extra_keys
+  row_mismatch_tolerance_pct: 0.0    # rows / columns with different values
+  delta_count_tolerance_pct: 0.0     # delta_row_count
+  delta_key_tolerance_pct: 0.0       # delta_keys
+  # delta_value_tolerance_pct: 0.0   # delta_values (default: row_mismatch_tolerance_pct)
+  distribution_tolerance_pct: 0.0
+  distribution_tolerance_rows: 0
+
+  # results still go to Databricks
+  results_table: it_bronze_dev.test_only.parity_results
+  mismatch_table: it_bronze_dev.test_only.parity_mismatches
+
+tables:
+  - name: <SOURCE_TABLE_NAME>                      # table name in <SOURCE_SCHEMA>
+    target_name: <TARGET_TABLE_NAME>               # table name in <TARGET_SCHEMA> (delete the line if the same)
+    keys: [<KEY_COL_1>, <KEY_COL_2>]               # primary key; [] = whole-row comparison
+    exclude_cols: [<COL_NOT_COMPARED_1>, <COL_NOT_COMPARED_2>]   # surrogate keys, batch ids, load timestamps
+    incremental:
+      # rows each ETL run wrote; > from AND <= to (the previous watermark is not included)
+      source_delta: "<SOURCE_INCREMENTAL_COLUMN> > TIMESTAMP '${WM_FROM}' AND <SOURCE_INCREMENTAL_COLUMN> <= TIMESTAMP '${WM_TO}'"
+      target_delta: "<TARGET_INCREMENTAL_COLUMN> > TIMESTAMP '${WM_FROM}' AND <TARGET_INCREMENTAL_COLUMN> <= TIMESTAMP '${WM_TO}'"
+      delta_only: true                             # false = also compare the whole table
+      # count_tolerance_pct: 0.0                   # per-table delta tolerances (override the settings)
+      # key_tolerance_pct: 0.0
+      # value_tolerance_pct: 0.0
+    # num_tolerance: 0.01                          # numbers may differ by up to this much
+    # force_full: true                             # never sample this table
