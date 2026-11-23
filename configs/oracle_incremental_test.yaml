@@ -2,6 +2,9 @@
 # Oracle-to-Oracle parity test: one incremental table, two databases with different
 # host / service / user / password / schema.
 #
+# Passwords: password_env (set in the notebook, default below), password (in this file) or password_secret.
+# See notebooks/run_oracle_incremental.py.
+#
 #   run = run_parity(YAML, env="oracle", send_email=False,
 #                    params={"WM_FROM": "2026-11-22 00:00:00", "WM_TO": "2026-11-23 00:00:00"})
 #   displayHTML(run.report_html)
@@ -19,13 +22,19 @@ environments:
       url: "jdbc:oracle:thin:@//<SOURCE_HOST>:<SOURCE_PORT>/<SOURCE_SERVICE_NAME>"
       user: <SOURCE_USER>
       schema: <SOURCE_SCHEMA>
-      password_secret: {scope: <SOURCE_SECRET_SCOPE>, key: <SOURCE_SECRET_KEY>}
+      # password: pick ONE of the three
+      password_env: SRC_DB_PWD               # set in the notebook: os.environ["SRC_DB_PWD"] = "..."
+      # password: "<SOURCE_PASSWORD>"           # directly in this file (do not commit it to git)
+      # password_secret: {scope: <SOURCE_SECRET_SCOPE>, key: <SOURCE_SECRET_KEY>}   # Databricks secret
     target:                                        # new ETL's output (e.g. Talend)
       type: oracle
       url: "jdbc:oracle:thin:@//<TARGET_HOST>:<TARGET_PORT>/<TARGET_SERVICE_NAME>"
       user: <TARGET_USER>
       schema: <TARGET_SCHEMA>
-      password_secret: {scope: <TARGET_SECRET_SCOPE>, key: <TARGET_SECRET_KEY>}
+      # password: pick ONE of the three
+      password_env: TGT_DB_PWD               # set in the notebook: os.environ["TGT_DB_PWD"] = "..."
+      # password: "<TARGET_PASSWORD>"           # directly in this file (do not commit it to git)
+      # password_secret: {scope: <TARGET_SECRET_SCOPE>, key: <TARGET_SECRET_KEY>}   # Databricks secret
 
 settings:
   ts_truncate: second                # ignore millisecond / microsecond differences
