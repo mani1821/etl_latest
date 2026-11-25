@@ -71,5 +71,12 @@ tables:
       # count_tolerance_pct: 0.0                   # per-table delta tolerances (override the settings)
       # key_tolerance_pct: 0.0
       # value_tolerance_pct: 0.0
+    # history table (every version of a record kept): version checks over the WHOLE table
+    history:
+      id: [<BUSINESS_ID_COL>]                      # e.g. CIRCUIT_DESIGN_ID
+      version: <VERSION_COL>                       # e.g. LAST_MODIFIED_DATE (latest version = highest)
+      hash: <HASH_COL>                             # e.g. MD5_CHECK_SUM (same recipe on both sides)
+      # tolerance_pct: 0.0                         # % of ids allowed to differ (versions_per_id, latest_version)
+      # checks: [versions_per_id, latest_version, redundant_versions, run_activity]
     # num_tolerance: 0.01                          # numbers may differ by up to this much
     # force_full: true                             # never sample this table

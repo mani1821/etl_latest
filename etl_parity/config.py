@@ -136,6 +136,30 @@ class Incremental:
     value_tolerance_pct: Optional[float] = None   # delta rows with different values up to this % of matched rows
 
 
+HISTORY_CHECKS = ("versions_per_id", "latest_version", "redundant_versions", "run_activity")
+
+
+@dataclass
+class History:
+    """History table (every version of a record kept): grain = id + version."""
+    id: list                                  # business id column(s), e.g. [CIRCUIT_DESIGN_ID]
+    version: str                              # version column, e.g. LAST_MODIFIED_DATE (latest = highest)
+    hash: Optional[str] = None                # row hash column, e.g. MD5_CHECK_SUM (latest_version / redundant_versions)
+    tolerance_pct: float = 0.0                # IDs allowed to differ (versions_per_id, latest_version), % of source IDs
+    checks: list = field(default_factory=lambda: list(HISTORY_CHECKS))
+
+    def __post_init__(self):
+        self.id = [str(c).upper() for c in ([self.id] if isinstance(self.id, str) else (self.id or []))]
+        if not self.id or not self.version:
+            raise ValueError("history needs id and version")
+        self.version = str(self.version).upper()
+        self.hash = str(self.hash).upper() if self.hash else None
+        self.checks = [str(c).lower() for c in ([self.checks] if isinstance(self.checks, str) else self.checks)]
+        bad = [c for c in self.checks if c not in HISTORY_CHECKS]
+        if bad:
+            raise ValueError(f"history.checks: unknown {bad}; allowed: {list(HISTORY_CHECKS)}")
+
+
 @dataclass
 class TableSpec:
     name: str
@@ -148,6 +172,7 @@ class TableSpec:
     target_name: Optional[str] = None         # table name on the target side, if different
     row_mismatch_tolerance_pct: Optional[float] = None   # overrides the global setting
     incremental: Optional[Incremental] = None
+    history: Optional[History] = None         # history-table checks (see History)
     distribution_tolerance_pct: Optional[float] = None   # overrides the setting for this table
     distribution_tolerance_rows: Optional[int] = None    # overrides the setting for this table
     # every global tolerance can be set per table under the same name (None = the setting)
@@ -214,6 +239,10 @@ def build_spec(tcfg: dict, params: dict, env: Optional[str]) -> TableSpec:
                 raise ValueError(f"{label}.incremental needs {k}")
             inc[k] = fill_params(inc[k], params, where)
         tcfg["incremental"] = Incremental(**inc)
+    if tcfg.get("history"):
+        h = dict(tcfg["history"])
+        _check_keys(History, h, f"table {label}.history")
+        tcfg["history"] = History(**h)
     return TableSpec(**tcfg)
 
 

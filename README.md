@@ -195,3 +195,24 @@ Instead of a `tables:` list, the YAML holds one query (see `configs/icd_dpi.yaml
 `delta_value_tolerance_pct`, `distribution_tolerance_pct`, `distribution_tolerance_rows` can be set per table (in
 `overrides:` or a `tables:` entry) under the same name; the table's value wins over `settings`. For DELTA tables the
 table's `incremental:` block (`count_tolerance_pct`, `key_tolerance_pct`, `value_tolerance_pct`) wins over both.
+
+## 3.15.0: history tables (`history:`)
+
+For tables that keep every version of a record (grain = business id + version, latest = highest version):
+
+```yaml
+    history: {id: [CIRCUIT_DESIGN_ID], version: LAST_MODIFIED_DATE, hash: MD5_CHECK_SUM}
+```
+
+Validation `history`, always over the whole table (never sampled):
+
+| check | compares | status |
+|---|---|---|
+| `versions_per_id` | number of versions of every id | ids that differ, % of source ids vs `history.tolerance_pct` |
+| `latest_version` | latest version of every id and its hash | same |
+| `redundant_versions` | consecutive versions of an id with the same hash | FAIL if the target has more than the source; WARN if both have some |
+| `run_new_ids` / `run_new_versions` / `run_older_versions` | rows the run touched (the table's `incremental` window), by kind | count difference vs the delta count tolerance |
+
+`run_*` need an `incremental` block (SKIP otherwise). Kinds: new ids = ids whose every version is in the run;
+new versions = newer than every untouched version of the id; older versions = not newer than an untouched version
+(in-place updates of history or late-arriving versions). Example ids go to the mismatch table.

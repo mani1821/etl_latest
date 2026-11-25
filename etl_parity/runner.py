@@ -100,6 +100,94 @@ class TableValidator:
                 self.check_incremental(spec, cols, non_keys)
             else:
                 self.check_incremental_keyless(spec, cols)
+        if spec.history:
+            self.check_history(spec)
+
+    # ------------------------------------------------------------------ history tables
+    def check_history(self, spec: TableSpec):
+        """Version checks of a history table, over the whole table (see history.py)."""
+        from .history import compare, per_id
+        t, V, h = spec.name, "history", spec.history
+        on = set(h.checks)
+        if not h.hash:
+            on -= {"redundant_versions"}
+        inc = spec.incremental if "run_activity" in on else None
+        if "run_activity" in on and not inc:
+            self.rec.rec(t, V, "run_activity", "SKIP", detail="needs an incremental block (the run window)")
+            on.discard("run_activity")
+        src = per_id(self.src, spec.name, h, spec.filter, inc.source_delta if inc else None, spec.ts_truncate)
+        tgt = per_id(self.tgt, spec.target_name, h, spec.filter, inc.target_delta if inc else None, spec.ts_truncate)
+        cmp_ = try_cache(compare(src, tgt))
+        try:
+            g = cmp_.agg(
+                F.count("s_n").alias("ids_s"), F.count("t_n").alias("ids_t"),
+                F.coalesce(F.sum("s_n"), F.lit(0)).alias("rows_s"), F.coalesce(F.sum("t_n"), F.lit(0)).alias("rows_t"),
+                F.sum(F.when(~F.col("s_n").eqNullSafe(F.col("t_n")), 1).otherwise(0)).alias("n_diff"),
+                F.sum(F.when(~F.col("s_last_ver").eqNullSafe(F.col("t_last_ver")) |
+                             ~F.col("s_last_hsh").eqNullSafe(F.col("t_last_hsh")), 1).otherwise(0)).alias("last_diff"),
+                *[F.coalesce(F.sum(f"{p}_{c}"), F.lit(0)).alias(f"{p}_{c}")
+                  for p in ("s", "t") for c in ("redundant", "new_ids", "new_versions", "older_versions")],
+            ).first()
+            ids_s, ids_t, tol = g["ids_s"], g["ids_t"], h.tolerance_pct
+            ids_note = f"{ids_s:,} vs {ids_t:,} ids, {g['rows_s']:,} vs {g['rows_t']:,} versions"
+            hid = F.to_json(F.struct(F.col("hid").alias("id"))).alias("key")
+
+            if "versions_per_id" in on:
+                n, pct = g["n_diff"] or 0, (g["n_diff"] or 0) / max(ids_s, 1) * 100
+                self.rec.rec(t, V, "versions_per_id", self._within(n, pct, tol), ids_s, ids_t,
+                             f"{n:,} of {ids_s:,} source ids have a different number of versions (or exist on one "
+                             f"side only) = {pct:.4f}% (tolerance {tol}%); {ids_note}")
+                if n:
+                    self.rec.mismatches(t, V, "versions_per_id", cmp_.where(~F.col("s_n").eqNullSafe(F.col("t_n")))
+                                        .select(hid, F.col("s_n").alias("src_value"), F.col("t_n").alias("tgt_value")))
+
+            if "latest_version" in on:
+                n, pct = g["last_diff"] or 0, (g["last_diff"] or 0) / max(ids_s, 1) * 100
+                what = "latest version" + (" or its hash" if h.hash else "")
+                self.rec.rec(t, V, "latest_version", self._within(n, pct, tol), ids_s, ids_t,
+                             f"{n:,} of {ids_s:,} source ids have a different {what} = {pct:.4f}% (tolerance {tol}%)")
+                if n:
+                    val = lambda p: F.concat_ws(" | ", F.col(f"{p}_last_ver"), F.col(f"{p}_last_hsh"))
+                    self.rec.mismatches(t, V, "latest_version", cmp_.where(
+                        ~F.col("s_last_ver").eqNullSafe(F.col("t_last_ver")) |
+                        ~F.col("s_last_hsh").eqNullSafe(F.col("t_last_hsh")))
+                        .select(hid, F.lit("version | hash").alias("column"),
+                                val("s").alias("src_value"), val("t").alias("tgt_value")))
+
+            if "redundant_versions" in on:
+                rs, rt = g["s_redundant"], g["t_redundant"]
+                status = ("PASS" if rt == rs == 0 else "FAIL" if rt > rs else "WARN")
+                why = ("" if status == "PASS" else
+                       "target has more versions without a real change than the source" if rt > rs else
+                       "same number on both sides (inherited from the source)" if rt == rs else
+                       "target has fewer than the source")
+                self.rec.rec(t, V, "redundant_versions", status, rs, rt,
+                             f"consecutive versions of an id with the same {h.hash}: {rs:,} vs {rt:,}"
+                             + (f"; {why}" if why else ""))
+                if rs or rt:
+                    self.rec.mismatches(t, V, "redundant_versions", cmp_.where(
+                        (F.coalesce("s_redundant", F.lit(0)) > 0) | (F.coalesce("t_redundant", F.lit(0)) > 0))
+                        .orderBy(F.desc(F.coalesce("t_redundant", F.lit(0))))
+                        .select(hid, F.col("s_redundant").alias("src_value"), F.col("t_redundant").alias("tgt_value")))
+
+            if "run_activity" in on:
+                ctol = self._delta_tol(spec, "count_tolerance_pct")
+                parts = []
+                for c, check, label in (("new_ids", "run_new_ids", "rows of ids whose every version is in the run (new ids)"),
+                                        ("new_versions", "run_new_versions", "new versions of existing ids"),
+                                        ("older_versions", "run_older_versions",
+                                         "older versions touched (in-place updates of history / late versions)")):
+                    a, b = g[f"s_{c}"], g[f"t_{c}"]
+                    pct = abs(a - b) / max(a, 1) * 100
+                    self.rec.rec(t, V, check, self._within(abs(a - b), pct, ctol), a, b,
+                                 f"{label}: {a:,} vs {b:,}, diff {pct:.4f}% (tolerance {ctol}%) | "
+                                 f"source: {inc.source_delta} | target: {inc.target_delta}")
+                    parts.append(f"{c.replace('_', ' ')} {a:,}/{b:,}")
+                self.rec.note(t, V, f"{ids_note}; run: " + ", ".join(parts))
+            else:
+                self.rec.note(t, V, ids_note)
+        finally:
+            try_unpersist(cmp_)
 
     # ------------------------------------------------------------------ 1. schema
     def check_schema(self, spec: TableSpec):

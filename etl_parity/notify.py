@@ -36,7 +36,7 @@ EMAIL_KEYS = {"to", "send_on", "smtp_server", "smtp_port", "sender", "starttls",
               "description", "dashboard_link"}
 VALIDATIONS = [("schema", "Schema"), ("row_count", "Row count"), ("row_hash", "Row hash"),
                ("column_profiles", "Column profiles"), ("column_distributions", "Distributions"),
-               ("incremental", "Incremental")]
+               ("incremental", "Incremental"), ("history", "History")]
 LABEL = {"PASS": "passed", "WARN": "within tolerance", "FAIL": "failed", "ERROR": "error", "SKIP": "skipped"}
 
 
