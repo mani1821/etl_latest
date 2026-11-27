@@ -4,7 +4,9 @@ Which rows get compared.
     small table (<= sample_threshold_rows) or force_full  -> every row, both sides
     big table, Databricks tables                           -> key-hash sample: the same keys on both sides
                                                               (hash of the normalised key < sample fraction)
-    big table, Oracle                                      -> sample-and-lookup, both directions:
+    big table, Oracle on both sides                        -> key-hash sample inside Oracle (ORA_HASH of the key text):
+                                                              the same keys on both sides, one parallel scan each
+    big table, Oracle on one side only                     -> sample-and-lookup, both directions:
 
         1. sample the SOURCE (sample_pct %, at most max_sample_rows)   -> rows A
         2. fetch the same keys from the TARGET                          -> rows B
@@ -63,6 +65,18 @@ def rows_to_compare(src_reader, tgt_reader, spec: TableSpec, cols: list[str], s:
         b = b.where(key_bucket(b, keys, spec.ts_truncate) < cut)
         note = (f"key-hash sample: the same {cut / 10_000:g}% of keys on both sides (deterministic) "
                 f"of {n_src:,} / {n_tgt:,} rows")
+        return ComparedRows(a, b, "delta_sample" if delta else "sample", [note])
+
+    from .readers import OracleReader
+    if isinstance(src_reader, OracleReader) and isinstance(tgt_reader, OracleReader):
+        # Oracle on both sides: the same keys on both sides, picked by ORA_HASH of the key text inside Oracle.
+        # One parallel scan per side, only the sampled rows travel; no key lookups (huge IN lists are very slow).
+        f = min(s.sample_pct / 100.0, s.max_sample_rows / max(n_src, n_tgt, 1))
+        cut = max(1, int(round(f * OracleReader.HASH_BUCKETS)))
+        a = src_reader.hash_sample(spec.name, cols, src_where, keys, cut, n_src)
+        b = tgt_reader.hash_sample(spec.target_name, cols, tgt_where, keys, cut, n_tgt)
+        note = (f"key-hash sample in Oracle (ORA_HASH): the same {100 * cut / OracleReader.HASH_BUCKETS:g}% of keys "
+                f"on both sides of {n_src:,} / {n_tgt:,} rows")
         return ComparedRows(a, b, "delta_sample" if delta else "sample", [note])
 
     f_src, f_tgt = sample_fraction(n_src, s), sample_fraction(n_tgt, s)

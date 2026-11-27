@@ -215,6 +215,32 @@ class OracleReader:
         return self._sql(f"SELECT {', '.join(cols)} FROM {self.fq(table)} "
                          f"SAMPLE BLOCK ({max(pct, 0.000001):.6f}) SEED ({int(seed)}) WHERE {_and(where)}")
 
+    # ---- key-hash sample (Oracle on both sides): the same keys on both sides, no lookups
+    HASH_BUCKETS = 1_000_000
+
+    def key_text(self, table: str, keys: list[str]) -> str:
+        """The key as one text, equal on both sides for equal keys whatever the column types
+        (NUMBER(9,0) = NUMBER, CHAR = VARCHAR2 after TRIM, DATE = TIMESTAMP to the second). Dates are hashed to the
+        second: keys that differ only below a second land in the same bucket, which is harmless (the bucket only
+        decides which keys are compared, never whether they match)."""
+        types = self._types.get(table.upper()) or {c.name: c.type for c in self.columns(table)}
+        parts = []
+        for k in keys:
+            t = (types.get(k.upper()) or "").upper()
+            if t.startswith(("NUMBER", "FLOAT", "BINARY_", "INTEGER")):
+                e = f"TO_CHAR({k}, 'TM9', 'NLS_NUMERIC_CHARACTERS=''.,''')"     # '.' whatever the DB's settings
+            elif t.startswith("DATE") or t.startswith("TIMESTAMP"):
+                e = f"TO_CHAR({k}, 'YYYY-MM-DD HH24:MI:SS')"
+            else:
+                e = f"TRIM({k})"
+            parts.append(f"NVL({e}, '<NULL>')")
+        return " || '|' || ".join(parts)
+
+    def hash_sample(self, table, cols, where, keys, cut: int, n_rows=None) -> DataFrame:
+        """Rows whose key hash is below cut (of HASH_BUCKETS): filtered inside Oracle, read in parallel slices."""
+        cond = f"ORA_HASH({self.key_text(table, keys)}, {self.HASH_BUCKETS - 1}) < {int(cut)}"
+        return self.read(table, cols, _and(where, cond), n_rows)
+
     # ---- lookup: fetch exactly the given keys
     def _literal(self, v, oracle_type: str) -> str:
         t = (oracle_type or "").upper()

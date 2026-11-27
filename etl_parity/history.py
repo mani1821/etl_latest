@@ -47,7 +47,8 @@ def _where(*conds) -> Optional[str]:
 def per_id(reader, table: str, h, filt: Optional[str], delta: Optional[str], ts_truncate: Optional[str]) -> DataFrame:
     """One row per id: versions, latest version (+ hash), redundant versions, and (with delta) the run's rows by kind."""
     cols = list(dict.fromkeys(h.id + [h.version] + ([h.hash] if h.hash else [])))
-    df = reader.read(table, cols, filt)
+    n = reader.count(table, filt) if hasattr(reader, "_rowid_slices") else None   # Oracle: parallel slices
+    df = reader.read(table, cols, filt, n)
     types = {f.name: f.dataType for f in df.schema.fields}
     hid = _id(h.id, types, ts_truncate)
     ver = norm_col(F.col(h.version), types[h.version], ts_truncate)
@@ -55,7 +56,7 @@ def per_id(reader, table: str, h, filt: Optional[str], delta: Optional[str], ts_
     rows = df.select(hid.alias("hid"), ver.alias("ver"), hsh.alias("hsh"))
 
     if delta:                                         # rows this run wrote: flag them on the full table
-        d = reader.read(table, list(dict.fromkeys(h.id + [h.version])), _where(filt, delta))
+        d = reader.read(table, list(dict.fromkeys(h.id + [h.version])), _where(filt, delta), n)
         dt = {f.name: f.dataType for f in d.schema.fields}
         dhid = _id(h.id, dt, ts_truncate)
         d = d.select(dhid.alias("hid"), norm_col(F.col(h.version), dt[h.version], ts_truncate).alias("ver")) \
